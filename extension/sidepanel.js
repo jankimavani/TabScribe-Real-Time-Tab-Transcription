@@ -93,7 +93,51 @@ function startTimer() {
   }, 500);
 }
 
+// async function getTabStream() {
+//   return new Promise((resolve, reject) => {
+//     chrome.tabCapture.capture({ audio: true, video: false }, (stream) => {
+//       if (chrome.runtime.lastError || !stream) {
+//         reject(
+//           chrome.runtime.lastError || new Error("Failed to capture tab audio")
+//         );
+//       } else {
+//         resolve(stream);
+//       }
+//     });
+//   });
+// }
+
 async function getTabStream() {
+  // If we’re in a fallback tab UI, we passed ?targetTabId=### in the URL
+  const params = new URLSearchParams(location.search);
+  const targetTabId = Number(params.get("targetTabId"));
+
+  // Prefer getMediaStreamId when we know the target tab
+  if (targetTabId && chrome.tabCapture && chrome.tabCapture.getMediaStreamId) {
+    try {
+      const streamId = await chrome.tabCapture.getMediaStreamId({
+        targetTabId,
+      });
+      // Turn the ID into a real MediaStream via getUserMedia
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          mandatory: {
+            chromeMediaSource: "tab",
+            chromeMediaSourceId: streamId,
+          },
+        },
+        video: false,
+      });
+      return stream;
+    } catch (err) {
+      console.error(
+        "getMediaStreamId path failed, falling back to capture():",
+        err
+      );
+    }
+  }
+
+  // Side panel (modern Chrome) OR fallback if above failed:
   return new Promise((resolve, reject) => {
     chrome.tabCapture.capture({ audio: true, video: false }, (stream) => {
       if (chrome.runtime.lastError || !stream) {
