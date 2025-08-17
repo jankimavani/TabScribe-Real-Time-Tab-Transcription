@@ -1,5 +1,16 @@
 {
   "manifest_version": 3,
-  "name": "TabScribe",
-  "version": "1.0.0"
+  "name": "TabScribe — Real-Time Tab Transcription",
+  "version": "1.0.0",
+  "description": "Capture active tab audio and transcribe in (near) real time via a sidepanel.",
+  "permissions": ["tabCapture", "activeTab", "storage"],
+  "optional_permissions": ["microphone"],
+  "background": { "service_worker": "sw.js" },
+  "side_panel": { "default_path": "sidepanel.html" },
+  "action": { "default_title": "TabScribe" },
+  "icons": {
+    "16": "icons/16.png",
+    "48": "icons/48.png",
+    "128": "icons/128.png"
+  }
 }
