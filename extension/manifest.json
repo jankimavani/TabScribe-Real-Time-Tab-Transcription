@@ -4,7 +4,7 @@
   "version": "1.0.0",
   "description": "Capture active tab audio and transcribe in (near) real time via a sidepanel.",
   "permissions": ["tabCapture", "activeTab", "storage"],
-  "optional_permissions": ["microphone"],
+
   "background": { "service_worker": "sw.js" },
   "side_panel": { "default_path": "sidepanel.html" },
   "action": { "default_title": "TabScribe" }
