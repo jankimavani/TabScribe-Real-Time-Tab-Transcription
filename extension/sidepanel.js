@@ -27,6 +27,14 @@ window.addEventListener("error", (e) => {
   showBanner("Error: " + (e.error?.message || e.message), true);
 });
 
+async function getPreferredTargetTabId() {
+  const q = new URLSearchParams(location.search);
+  const fromQuery = Number(q.get("targetTabId"));
+  if (!Number.isNaN(fromQuery) && fromQuery > 0) return fromQuery;
+  const { targetTabId } = await chrome.storage.local.get("targetTabId");
+  return Number(targetTabId) || null;
+}
+
 $("#tsEvery").addEventListener(
   "change",
   (e) => (state.tsEvery = Number(e.target.value))
@@ -170,19 +178,15 @@ function startTimer() {
 //     });
 //   });
 // }
-
 async function getTabStream() {
-  const params = new URLSearchParams(location.search);
-  const targetTabId = Number(params.get("targetTabId"));
+  const targetTabId = await getPreferredTargetTabId();
   console.log("Target tab id:", targetTabId);
 
-  // Best path when UI is not in the target tab: capture that specific tab
   if (targetTabId && chrome.tabCapture?.getMediaStreamId) {
     try {
       const streamId = await chrome.tabCapture.getMediaStreamId({
         targetTabId,
       });
-      console.log("Got streamId?", !!streamId);
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
           mandatory: {
@@ -192,17 +196,16 @@ async function getTabStream() {
         },
         video: false,
       });
-      console.log(
-        "Tab stream tracks:",
-        stream.getTracks().map((t) => t.kind)
-      );
       return stream;
-    } catch (err) {
-      console.error("getMediaStreamId path failed:", err);
+    } catch (e) {
+      console.warn(
+        "getMediaStreamId path failed, falling back to capture():",
+        e
+      );
     }
   }
 
-  // Works well when the UI is a real side panel or you clicked on the audio tab
+  // Works when UI is a real Side Panel and you clicked on the audio tab
   return new Promise((resolve, reject) => {
     chrome.tabCapture.capture({ audio: true, video: false }, (stream) => {
       if (chrome.runtime.lastError || !stream) {
@@ -210,10 +213,6 @@ async function getTabStream() {
           chrome.runtime.lastError || new Error("Failed to capture tab audio")
         );
       } else {
-        console.log(
-          "capture() stream tracks:",
-          stream.getTracks().map((t) => t.kind)
-        );
         resolve(stream);
       }
     });
