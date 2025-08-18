@@ -16,6 +16,17 @@ const state = {
   useMic: false,
 };
 
+// Put these near the top of sidepanel.js
+window.addEventListener("unhandledrejection", (e) => {
+  console.error("Unhandled promise rejection:", e.reason);
+  showBanner("Error: " + (e.reason?.message || String(e.reason)), true);
+});
+
+window.addEventListener("error", (e) => {
+  console.error("Global error:", e.error || e.message);
+  showBanner("Error: " + (e.error?.message || e.message), true);
+});
+
 $("#tsEvery").addEventListener(
   "change",
   (e) => (state.tsEvery = Number(e.target.value))
@@ -123,15 +134,55 @@ function startTimer() {
 //     }
 //   }
 
+// async function getTabStream() {
+//   const targetTabId = Number(
+//     new URLSearchParams(location.search).get("targetTabId")
+//   );
+//   if (targetTabId && chrome.tabCapture?.getMediaStreamId) {
+//     try {
+//       const streamId = await chrome.tabCapture.getMediaStreamId({
+//         targetTabId,
+//       });
+//       const stream = await navigator.mediaDevices.getUserMedia({
+//         audio: {
+//           mandatory: {
+//             chromeMediaSource: "tab",
+//             chromeMediaSourceId: streamId,
+//           },
+//         },
+//         video: false,
+//       });
+//       return stream;
+//     } catch (e) {
+//       console.error("getMediaStreamId failed, falling back:", e);
+//     }
+//   }
+//   // Works when the UI is a real side panel or you clicked the icon on the audio tab
+//   return new Promise((resolve, reject) => {
+//     chrome.tabCapture.capture({ audio: true, video: false }, (stream) => {
+//       if (chrome.runtime.lastError || !stream) {
+//         reject(
+//           chrome.runtime.lastError || new Error("Failed to capture tab audio")
+//         );
+//       } else {
+//         resolve(stream);
+//       }
+//     });
+//   });
+// }
+
 async function getTabStream() {
-  const targetTabId = Number(
-    new URLSearchParams(location.search).get("targetTabId")
-  );
+  const params = new URLSearchParams(location.search);
+  const targetTabId = Number(params.get("targetTabId"));
+  console.log("Target tab id:", targetTabId);
+
+  // Best path when UI is not in the target tab: capture that specific tab
   if (targetTabId && chrome.tabCapture?.getMediaStreamId) {
     try {
       const streamId = await chrome.tabCapture.getMediaStreamId({
         targetTabId,
       });
+      console.log("Got streamId?", !!streamId);
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
           mandatory: {
@@ -141,12 +192,17 @@ async function getTabStream() {
         },
         video: false,
       });
+      console.log(
+        "Tab stream tracks:",
+        stream.getTracks().map((t) => t.kind)
+      );
       return stream;
-    } catch (e) {
-      console.error("getMediaStreamId failed, falling back:", e);
+    } catch (err) {
+      console.error("getMediaStreamId path failed:", err);
     }
   }
-  // Works when the UI is a real side panel or you clicked the icon on the audio tab
+
+  // Works well when the UI is a real side panel or you clicked on the audio tab
   return new Promise((resolve, reject) => {
     chrome.tabCapture.capture({ audio: true, video: false }, (stream) => {
       if (chrome.runtime.lastError || !stream) {
@@ -154,6 +210,10 @@ async function getTabStream() {
           chrome.runtime.lastError || new Error("Failed to capture tab audio")
         );
       } else {
+        console.log(
+          "capture() stream tracks:",
+          stream.getTracks().map((t) => t.kind)
+        );
         resolve(stream);
       }
     });
@@ -181,6 +241,48 @@ async function mixStreams(tabStream, micStream) {
   return dest.stream;
 }
 
+// async function startCapture() {
+//   if (!$("#serverUrl").value.trim()) {
+//     showBanner("Enter your server URL first.");
+//     return;
+//   }
+//   state.serverUrl = $("#serverUrl").value.trim();
+
+//   await stopCapture(); // clean start
+//   setStatus("Starting…", "starting");
+
+//   const tab = await getTabStream();
+//   const mic = await maybeGetMicStream();
+//   mediaStream = await mixStreams(tab, mic);
+
+//   const mime = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
+//     ? "audio/webm;codecs=opus"
+//     : "audio/webm";
+//   mediaRecorder = new MediaRecorder(mediaStream, {
+//     mimeType: mime,
+//     audioBitsPerSecond: 32000,
+//   });
+
+//   mediaRecorder.ondataavailable = (e) => {
+//     if (e.data && e.data.size > 0) queueChunk(e.data);
+//   };
+//   mediaRecorder.start(state.chunkSec * 1000);
+
+//   startedAt = Date.now();
+//   lastTsMark = 0;
+//   transcriptEl.textContent = "";
+//   addTimestamp(true);
+//   startTimer();
+
+//   $("#btnStart").disabled = true;
+//   $("#btnPause").disabled = false;
+//   $("#btnStop").disabled = false;
+//   $("#btnExportTxt").disabled = false;
+//   $("#btnExportJson").disabled = false;
+
+//   setStatus("Recording", "recording");
+// }
+
 async function startCapture() {
   if (!$("#serverUrl").value.trim()) {
     showBanner("Enter your server URL first.");
@@ -191,36 +293,67 @@ async function startCapture() {
   await stopCapture(); // clean start
   setStatus("Starting…", "starting");
 
-  const tab = await getTabStream();
-  const mic = await maybeGetMicStream();
-  mediaStream = await mixStreams(tab, mic);
+  try {
+    let stream = null;
 
-  const mime = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
-    ? "audio/webm;codecs=opus"
-    : "audio/webm";
-  mediaRecorder = new MediaRecorder(mediaStream, {
-    mimeType: mime,
-    audioBitsPerSecond: 32000,
-  });
+    // 1) Try capturing the intended tab
+    try {
+      stream = await getTabStream();
+    } catch (e) {
+      console.warn("Tab capture failed:", e);
+      showBanner("Tab capture failed — trying system audio fallback…", true);
+    }
 
-  mediaRecorder.ondataavailable = (e) => {
-    if (e.data && e.data.size > 0) queueChunk(e.data);
-  };
-  mediaRecorder.start(state.chunkSec * 1000);
+    // 2) Fallback: system audio
+    if (!stream) {
+      stream = await getSystemAudio();
+    }
 
-  startedAt = Date.now();
-  lastTsMark = 0;
-  transcriptEl.textContent = "";
-  addTimestamp(true);
-  startTimer();
+    if (!stream || stream.getAudioTracks().length === 0) {
+      throw new Error(
+        "No audio track captured. Make sure the source tab is playing sound or allow “Share system audio”."
+      );
+    }
 
-  $("#btnStart").disabled = true;
-  $("#btnPause").disabled = false;
-  $("#btnStop").disabled = false;
-  $("#btnExportTxt").disabled = false;
-  $("#btnExportJson").disabled = false;
+    mediaStream = stream;
 
-  setStatus("Recording", "recording");
+    const mime = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
+      ? "audio/webm;codecs=opus"
+      : "audio/webm";
+    mediaRecorder = new MediaRecorder(mediaStream, {
+      mimeType: mime,
+      audioBitsPerSecond: 32000,
+    });
+
+    mediaRecorder.ondataavailable = (e) => {
+      if (e.data && e.data.size > 0) queueChunk(e.data);
+    };
+    mediaRecorder.start(state.chunkSec * 1000);
+
+    startedAt = Date.now();
+    lastTsMark = 0;
+    transcriptEl.textContent = "";
+    addTimestamp(true);
+    startTimer();
+
+    $("#btnStart").disabled = true;
+    $("#btnPause").disabled = false;
+    $("#btnStop").disabled = false;
+    $("#btnExportTxt").disabled = false;
+    $("#btnExportJson").disabled = false;
+
+    setStatus("Recording", "recording");
+  } catch (err) {
+    console.error("Start failed:", err);
+    setStatus("Idle", "idle");
+    showBanner("Start failed: " + (err.message || String(err)), true);
+    // Make sure we don’t leave dangling tracks
+    if (mediaStream) {
+      mediaStream.getTracks().forEach((t) => t.stop());
+      mediaStream = null;
+    }
+    mediaRecorder = null;
+  }
 }
 
 function pauseRec() {
@@ -328,19 +461,29 @@ async function maybeUpload() {
 }
 
 // async function uploadChunk(blob) {
+//   console.log("Uploading chunk bytes:", blob.size);
 //   const fd = new FormData();
 //   fd.append("file", blob, `chunk-${Date.now()}.webm`);
-//   const res = await fetch(state.serverUrl, { method: "POST", body: fd });
-//   if (!res.ok) throw new Error(`HTTP ${res.status}`);
-//   const data = await res.json();
+//   let res;
+//   try {
+//     res = await fetch(state.serverUrl, { method: "POST", body: fd });
+//   } catch (err) {
+//     console.error("Network error to server:", err);
+//     throw err;
+//   }
+//   if (!res.ok) {
+//     const text = await res.text().catch(() => "");
+//     console.error("Server responded non-OK:", res.status, text);
+//     throw new Error(`HTTP ${res.status} ${text.slice(0, 200)}`);
+//   }
+//   const data = await res.json().catch(() => ({}));
+//   console.log(
+//     "Transcript text length:",
+//     (data.text || "").length,
+//     "preview:",
+//     (data.text || "").slice(0, 60)
+//   );
 //   return data.text || data.transcript || "";
-// }
-
-// function delay(ms) {
-//   return new Promise((r) => setTimeout(r, ms));
-// }
-// function backoffMs(n) {
-//   return Math.min(30000, 1000 * 2 ** n);
 // }
 
 async function uploadChunk(blob) {
@@ -367,4 +510,17 @@ async function uploadChunk(blob) {
     (data.text || "").slice(0, 60)
   );
   return data.text || data.transcript || "";
+}
+
+async function getSystemAudio() {
+  // Prompts a picker: select a screen/tab and tick "Share system audio"
+  const s = await navigator.mediaDevices.getDisplayMedia({
+    video: true,
+    audio: true,
+  });
+  // Stop video track to save CPU; keep audio
+  const v = s.getVideoTracks()[0];
+  if (v) v.stop();
+  console.log("System audio tracks:", s.getAudioTracks().length);
+  return s;
 }
