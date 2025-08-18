@@ -67,7 +67,7 @@ const upload = multer({
   limits: { fileSize: 25 * 1024 * 1024 },
 });
 
-const PROVIDER = (process.env.PROVIDER || "openai").toLowerCase();
+const PROVIDER = (process.env.PROVIDER || "openai").trim().toLowerCase();
 
 // Only init OpenAI client if we use it
 const openai =

@@ -60,33 +60,74 @@ chrome.runtime.onInstalled.addListener(async () => {
   }
 });
 
-// When the toolbar icon is clicked:
+// // When the toolbar icon is clicked:
+// chrome.action.onClicked.addListener(async (tab) => {
+//   const targetTabId = tab?.id;
+
+//   // Prefer the real side panel on Chrome 139
+//   if (chrome.sidePanel?.open) {
+//     try {
+//       await chrome.sidePanel.open({ windowId: tab.windowId });
+//       return;
+//     } catch (e) {
+//       console.warn("Failed to open side panel, falling back to popup:", e);
+//     }
+//   }
+
+//   // Fallback: a tidy popup window bound to the speech tab (doesn't cover the page)
+//   const url = chrome.runtime.getURL(
+//     `sidepanel.html?targetTabId=${targetTabId}`
+//   );
+//   try {
+//     if (popupWindowId) {
+//       const w = await chrome.windows.get(popupWindowId).catch(() => null);
+//       if (w) {
+//         await chrome.windows.update(popupWindowId, { focused: true });
+//         return;
+//       }
+//     }
+//   } catch {}
+//   const w = await chrome.windows.create({
+//     url,
+//     type: "popup",
+//     width: 420,
+//     height: 700,
+//     focused: true,
+//   });
+//   popupWindowId = w.id;
+// });
+
+// // Cleanup when popup closes
+// chrome.windows.onRemoved.addListener((id) => {
+//   if (id === popupWindowId) popupWindowId = null;
+// });
+
 chrome.action.onClicked.addListener(async (tab) => {
   const targetTabId = tab?.id;
+  // Remember it so sidepanel.html can read it even when opened via real Side Panel
+  await chrome.storage.local.set({ targetTabId });
 
-  // Prefer the real side panel on Chrome 139
+  // Prefer real Side Panel
   if (chrome.sidePanel?.open) {
     try {
+      await chrome.sidePanel.setPanelBehavior?.({
+        openPanelOnActionClick: true,
+      });
+      await chrome.sidePanel.setOptions?.({
+        path: "sidepanel.html",
+        enabled: true,
+      });
       await chrome.sidePanel.open({ windowId: tab.windowId });
       return;
     } catch (e) {
-      console.warn("Failed to open side panel, falling back to popup:", e);
+      console.warn("Side panel open failed, falling back to popup", e);
     }
   }
 
-  // Fallback: a tidy popup window bound to the speech tab (doesn't cover the page)
+  // Fallback: tidy popup (NOT a full tab)
   const url = chrome.runtime.getURL(
     `sidepanel.html?targetTabId=${targetTabId}`
   );
-  try {
-    if (popupWindowId) {
-      const w = await chrome.windows.get(popupWindowId).catch(() => null);
-      if (w) {
-        await chrome.windows.update(popupWindowId, { focused: true });
-        return;
-      }
-    }
-  } catch {}
   const w = await chrome.windows.create({
     url,
     type: "popup",
@@ -94,10 +135,4 @@ chrome.action.onClicked.addListener(async (tab) => {
     height: 700,
     focused: true,
   });
-  popupWindowId = w.id;
-});
-
-// Cleanup when popup closes
-chrome.windows.onRemoved.addListener((id) => {
-  if (id === popupWindowId) popupWindowId = null;
 });

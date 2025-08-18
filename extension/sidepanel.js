@@ -524,3 +524,10 @@ async function getSystemAudio() {
   console.log("System audio tracks:", s.getAudioTracks().length);
   return s;
 }
+
+function delay(ms) {
+  return new Promise((r) => setTimeout(r, ms));
+}
+function backoffMs(n) {
+  return Math.min(30000, 1000 * 2 ** n);
+} // 1s, 2s, 4s... cap 30s
