@@ -277,27 +277,40 @@ function queueChunk(blob) {
   queue.push({ blob, ts: Date.now(), retries: 0 });
   maybeUpload();
 }
-
 async function maybeUpload() {
   if (uploading || !navigator.onLine) return;
   uploading = true;
   try {
     while (queue.length) {
-      const item = queue[0];
+      const item = queue[0]; // peek
       try {
         const text = await uploadChunk(item.blob);
         if (text && text.trim()) {
           addTimestamp();
           appendText(text.trim());
+        } else {
+          console.warn(
+            "Empty transcript for chunk at",
+            new Date(item.ts).toISOString()
+          );
         }
-        queue.shift();
+        queue.shift(); // remove processed item
       } catch (e) {
-        item.retries++;
+        item.retries = (item.retries || 0) + 1;
+        showBanner(
+          `Upload error: ${e?.message || String(e)}`.slice(0, 120) +
+            ` (try ${item.retries}/3)`,
+          true
+        );
+
         if (item.retries >= 3) {
+          // leave the item in the queue; we'll try again later (e.g., when back online)
           showBanner("Upload failed after retries — keeping in queue.", true);
-          break;
+          break; // exit the while loop so we don't spin
         }
+
         await delay(backoffMs(item.retries));
+        // then loop to retry the same item
       }
     }
   } finally {
@@ -305,18 +318,44 @@ async function maybeUpload() {
   }
 }
 
+// async function uploadChunk(blob) {
+//   const fd = new FormData();
+//   fd.append("file", blob, `chunk-${Date.now()}.webm`);
+//   const res = await fetch(state.serverUrl, { method: "POST", body: fd });
+//   if (!res.ok) throw new Error(`HTTP ${res.status}`);
+//   const data = await res.json();
+//   return data.text || data.transcript || "";
+// }
+
+// function delay(ms) {
+//   return new Promise((r) => setTimeout(r, ms));
+// }
+// function backoffMs(n) {
+//   return Math.min(30000, 1000 * 2 ** n);
+// }
+
 async function uploadChunk(blob) {
+  console.log("Uploading chunk bytes:", blob.size);
   const fd = new FormData();
   fd.append("file", blob, `chunk-${Date.now()}.webm`);
-  const res = await fetch(state.serverUrl, { method: "POST", body: fd });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  const data = await res.json();
+  let res;
+  try {
+    res = await fetch(state.serverUrl, { method: "POST", body: fd });
+  } catch (err) {
+    console.error("Network error to server:", err);
+    throw err;
+  }
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    console.error("Server responded non-OK:", res.status, text);
+    throw new Error(`HTTP ${res.status} ${text.slice(0, 200)}`);
+  }
+  const data = await res.json().catch(() => ({}));
+  console.log(
+    "Transcript text length:",
+    (data.text || "").length,
+    "preview:",
+    (data.text || "").slice(0, 60)
+  );
   return data.text || data.transcript || "";
-}
-
-function delay(ms) {
-  return new Promise((r) => setTimeout(r, ms));
-}
-function backoffMs(n) {
-  return Math.min(30000, 1000 * 2 ** n);
 }
