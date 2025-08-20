@@ -1,3 +1,10 @@
+function delay(ms) {
+  return new Promise((r) => setTimeout(r, ms));
+}
+function backoffMs(n) {
+  return Math.min(30000, 1000 * 2 ** n);
+}
+
 let mediaStream, mediaRecorder, startedAt, timerId;
 let paused = false;
 let queue = [];
@@ -113,39 +120,9 @@ function startTimer() {
 }
 
 // async function getTabStream() {
-//   // If we’re in a fallback tab UI, we passed ?targetTabId=### in the URL
-//   const params = new URLSearchParams(location.search);
-//   const targetTabId = Number(params.get("targetTabId"));
+//   const targetTabId = await getPreferredTargetTabId();
+//   console.log("Target tab id:", targetTabId);
 
-//   // Prefer getMediaStreamId when we know the target tab
-//   if (targetTabId && chrome.tabCapture && chrome.tabCapture.getMediaStreamId) {
-//     try {
-//       const streamId = await chrome.tabCapture.getMediaStreamId({
-//         targetTabId,
-//       });
-//       // Turn the ID into a real MediaStream via getUserMedia
-//       const stream = await navigator.mediaDevices.getUserMedia({
-//         audio: {
-//           mandatory: {
-//             chromeMediaSource: "tab",
-//             chromeMediaSourceId: streamId,
-//           },
-//         },
-//         video: false,
-//       });
-//       return stream;
-//     } catch (err) {
-//       console.error(
-//         "getMediaStreamId path failed, falling back to capture():",
-//         err
-//       );
-//     }
-//   }
-
-// async function getTabStream() {
-//   const targetTabId = Number(
-//     new URLSearchParams(location.search).get("targetTabId")
-//   );
 //   if (targetTabId && chrome.tabCapture?.getMediaStreamId) {
 //     try {
 //       const streamId = await chrome.tabCapture.getMediaStreamId({
@@ -162,10 +139,14 @@ function startTimer() {
 //       });
 //       return stream;
 //     } catch (e) {
-//       console.error("getMediaStreamId failed, falling back:", e);
+//       console.warn(
+//         "getMediaStreamId path failed, falling back to capture():",
+//         e
+//       );
 //     }
 //   }
-//   // Works when the UI is a real side panel or you clicked the icon on the audio tab
+
+//   // Works when UI is a real Side Panel and you clicked on the audio tab
 //   return new Promise((resolve, reject) => {
 //     chrome.tabCapture.capture({ audio: true, video: false }, (stream) => {
 //       if (chrome.runtime.lastError || !stream) {
@@ -205,7 +186,7 @@ async function getTabStream() {
     }
   }
 
-  // Works when UI is a real Side Panel and you clicked on the audio tab
+  // Works when the UI is in the real side panel and you clicked the icon on that tab
   return new Promise((resolve, reject) => {
     chrome.tabCapture.capture({ audio: true, video: false }, (stream) => {
       if (chrome.runtime.lastError || !stream) {
@@ -524,9 +505,28 @@ async function getSystemAudio() {
   return s;
 }
 
-function delay(ms) {
-  return new Promise((r) => setTimeout(r, ms));
+async function getActiveTabIdFromBg() {
+  try {
+    const resp = await chrome.runtime.sendMessage({
+      type: "GET_ACTIVE_TAB_ID",
+    });
+    return resp?.tabId || null;
+  } catch {
+    return null;
+  }
 }
-function backoffMs(n) {
-  return Math.min(30000, 1000 * 2 ** n);
-} // 1s, 2s, 4s... cap 30s
+
+async function getPreferredTargetTabId() {
+  // 1) URL query param if popup fallback opened us
+  const q = new URLSearchParams(location.search);
+  const fromQuery = Number(q.get("targetTabId"));
+  if (!Number.isNaN(fromQuery) && fromQuery > 0) return fromQuery;
+
+  // 2) Stored by action click (works for real side panel)
+  const { targetTabId } = await chrome.storage.local.get("targetTabId");
+  if (targetTabId) return Number(targetTabId);
+
+  // 3) Ask background for the current active tab
+  const fromBg = await getActiveTabIdFromBg();
+  return fromBg || null;
+}
