@@ -23,25 +23,17 @@ const state = {
   useMic: false,
 };
 
-// Put these near the top of sidepanel.js
+// ---------------- Error Handlers ----------------
 window.addEventListener("unhandledrejection", (e) => {
   console.error("Unhandled promise rejection:", e.reason);
   showBanner("Error: " + (e.reason?.message || String(e.reason)), true);
 });
-
 window.addEventListener("error", (e) => {
   console.error("Global error:", e.error || e.message);
   showBanner("Error: " + (e.error?.message || e.message), true);
 });
 
-async function getPreferredTargetTabId() {
-  const q = new URLSearchParams(location.search);
-  const fromQuery = Number(q.get("targetTabId"));
-  if (!Number.isNaN(fromQuery) && fromQuery > 0) return fromQuery;
-  const { targetTabId } = await chrome.storage.local.get("targetTabId");
-  return Number(targetTabId) || null;
-}
-
+// ---------------- Settings Inputs ----------------
 $("#tsEvery").addEventListener(
   "change",
   (e) => (state.tsEvery = Number(e.target.value))
@@ -67,6 +59,7 @@ window.addEventListener("offline", () =>
   showBanner("Offline — buffering audio locally.", true)
 );
 
+// ---------------- UI Buttons ----------------
 $("#btnStart").addEventListener("click", startCapture);
 $("#btnPause").addEventListener("click", pauseRec);
 $("#btnResume").addEventListener("click", resumeRec);
@@ -82,23 +75,20 @@ document.addEventListener("keydown", (e) => {
   if (e.code === "Escape") stopCapture();
 });
 
+// ---------------- Helpers ----------------
 function setStatus(msg, stateName) {
   statusEl.textContent = msg;
   if (stateName) statusEl.dataset.state = stateName;
 }
-
 function showBanner(msg, sticky = false) {
   bannerEl.textContent = msg;
   bannerEl.hidden = false;
   if (!sticky) setTimeout(() => (bannerEl.hidden = true), 3000);
 }
-
 function appendText(text) {
-  transcriptEl.append(text);
-  transcriptEl.append(" ");
+  transcriptEl.append(text + " ");
   transcriptEl.scrollTop = transcriptEl.scrollHeight;
 }
-
 function addTimestamp(force = false) {
   const elapsed = Math.floor((Date.now() - startedAt) / 1000);
   if (force || elapsed - lastTsMark >= state.tsEvery) {
@@ -108,7 +98,6 @@ function addTimestamp(force = false) {
     lastTsMark = elapsed;
   }
 }
-
 function startTimer() {
   const el = $("#timer");
   timerId = setInterval(() => {
@@ -119,46 +108,7 @@ function startTimer() {
   }, 500);
 }
 
-// async function getTabStream() {
-//   const targetTabId = await getPreferredTargetTabId();
-//   console.log("Target tab id:", targetTabId);
-
-//   if (targetTabId && chrome.tabCapture?.getMediaStreamId) {
-//     try {
-//       const streamId = await chrome.tabCapture.getMediaStreamId({
-//         targetTabId,
-//       });
-//       const stream = await navigator.mediaDevices.getUserMedia({
-//         audio: {
-//           mandatory: {
-//             chromeMediaSource: "tab",
-//             chromeMediaSourceId: streamId,
-//           },
-//         },
-//         video: false,
-//       });
-//       return stream;
-//     } catch (e) {
-//       console.warn(
-//         "getMediaStreamId path failed, falling back to capture():",
-//         e
-//       );
-//     }
-//   }
-
-//   // Works when UI is a real Side Panel and you clicked on the audio tab
-//   return new Promise((resolve, reject) => {
-//     chrome.tabCapture.capture({ audio: true, video: false }, (stream) => {
-//       if (chrome.runtime.lastError || !stream) {
-//         reject(
-//           chrome.runtime.lastError || new Error("Failed to capture tab audio")
-//         );
-//       } else {
-//         resolve(stream);
-//       }
-//     });
-//   });
-// }
+// ---------------- Audio Capture ----------------
 async function getTabStream() {
   const targetTabId = await getPreferredTargetTabId();
   console.log("Target tab id:", targetTabId);
@@ -168,7 +118,7 @@ async function getTabStream() {
       const streamId = await chrome.tabCapture.getMediaStreamId({
         targetTabId,
       });
-      const stream = await navigator.mediaDevices.getUserMedia({
+      return await navigator.mediaDevices.getUserMedia({
         audio: {
           mandatory: {
             chromeMediaSource: "tab",
@@ -177,29 +127,21 @@ async function getTabStream() {
         },
         video: false,
       });
-      return stream;
     } catch (e) {
-      console.warn(
-        "getMediaStreamId path failed, falling back to capture():",
-        e
-      );
+      console.warn("getMediaStreamId failed, fallback:", e);
     }
   }
 
-  // Works when the UI is in the real side panel and you clicked the icon on that tab
   return new Promise((resolve, reject) => {
     chrome.tabCapture.capture({ audio: true, video: false }, (stream) => {
       if (chrome.runtime.lastError || !stream) {
         reject(
           chrome.runtime.lastError || new Error("Failed to capture tab audio")
         );
-      } else {
-        resolve(stream);
-      }
+      } else resolve(stream);
     });
   });
 }
-
 async function maybeGetMicStream() {
   if (!state.useMic) return null;
   try {
@@ -209,60 +151,26 @@ async function maybeGetMicStream() {
     return null;
   }
 }
-
 async function mixStreams(tabStream, micStream) {
   if (!micStream) return tabStream;
   const ctx = new AudioContext();
   const dest = ctx.createMediaStreamDestination();
-  const s1 = ctx.createMediaStreamSource(tabStream);
-  const s2 = ctx.createMediaStreamSource(micStream);
-  s1.connect(dest);
-  s2.connect(dest);
+  ctx.createMediaStreamSource(tabStream).connect(dest);
+  ctx.createMediaStreamSource(micStream).connect(dest);
   return dest.stream;
 }
+async function getSystemAudio() {
+  const s = await navigator.mediaDevices.getDisplayMedia({
+    video: true,
+    audio: true,
+  });
+  const v = s.getVideoTracks()[0];
+  if (v) v.stop();
+  console.log("System audio tracks:", s.getAudioTracks().length);
+  return s;
+}
 
-// async function startCapture() {
-//   if (!$("#serverUrl").value.trim()) {
-//     showBanner("Enter your server URL first.");
-//     return;
-//   }
-//   state.serverUrl = $("#serverUrl").value.trim();
-
-//   await stopCapture(); // clean start
-//   setStatus("Starting…", "starting");
-
-//   const tab = await getTabStream();
-//   const mic = await maybeGetMicStream();
-//   mediaStream = await mixStreams(tab, mic);
-
-//   const mime = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
-//     ? "audio/webm;codecs=opus"
-//     : "audio/webm";
-//   mediaRecorder = new MediaRecorder(mediaStream, {
-//     mimeType: mime,
-//     audioBitsPerSecond: 32000,
-//   });
-
-//   mediaRecorder.ondataavailable = (e) => {
-//     if (e.data && e.data.size > 0) queueChunk(e.data);
-//   };
-//   mediaRecorder.start(state.chunkSec * 1000);
-
-//   startedAt = Date.now();
-//   lastTsMark = 0;
-//   transcriptEl.textContent = "";
-//   addTimestamp(true);
-//   startTimer();
-
-//   $("#btnStart").disabled = true;
-//   $("#btnPause").disabled = false;
-//   $("#btnStop").disabled = false;
-//   $("#btnExportTxt").disabled = false;
-//   $("#btnExportJson").disabled = false;
-
-//   setStatus("Recording", "recording");
-// }
-
+// ---------------- Capture Control ----------------
 async function startCapture() {
   if (!$("#serverUrl").value.trim()) {
     showBanner("Enter your server URL first.");
@@ -270,44 +178,36 @@ async function startCapture() {
   }
   state.serverUrl = $("#serverUrl").value.trim();
 
-  await stopCapture(); // clean start
+  await stopCapture();
   setStatus("Starting…", "starting");
 
   try {
     let stream = null;
-
-    // 1) Try capturing the intended tab
     try {
       stream = await getTabStream();
     } catch (e) {
       console.warn("Tab capture failed:", e);
       showBanner("Tab capture failed — trying system audio fallback…", true);
     }
+    if (!stream) stream = await getSystemAudio();
 
-    // 2) Fallback: system audio
-    if (!stream) {
-      stream = await getSystemAudio();
+    const mic = await maybeGetMicStream();
+    mediaStream = await mixStreams(stream, mic);
+
+    if (!mediaStream || mediaStream.getAudioTracks().length === 0) {
+      throw new Error("No audio track captured. Make sure sound is playing.");
     }
-
-    if (!stream || stream.getAudioTracks().length === 0) {
-      throw new Error(
-        "No audio track captured. Make sure the source tab is playing sound or allow “Share system audio”."
-      );
-    }
-
-    mediaStream = stream;
 
     const mime = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
       ? "audio/webm;codecs=opus"
       : "audio/webm";
+
     mediaRecorder = new MediaRecorder(mediaStream, {
       mimeType: mime,
       audioBitsPerSecond: 32000,
     });
-
-    mediaRecorder.ondataavailable = (e) => {
-      if (e.data && e.data.size > 0) queueChunk(e.data);
-    };
+    mediaRecorder.ondataavailable = (e) =>
+      e.data && e.data.size > 0 && queueChunk(e.data);
     mediaRecorder.start(state.chunkSec * 1000);
 
     startedAt = Date.now();
@@ -327,44 +227,36 @@ async function startCapture() {
     console.error("Start failed:", err);
     setStatus("Idle", "idle");
     showBanner("Start failed: " + (err.message || String(err)), true);
-    // Make sure we don’t leave dangling tracks
-    if (mediaStream) {
-      mediaStream.getTracks().forEach((t) => t.stop());
-      mediaStream = null;
-    }
+    if (mediaStream) mediaStream.getTracks().forEach((t) => t.stop());
+    mediaStream = null;
     mediaRecorder = null;
   }
 }
-
 function pauseRec() {
-  if (!mediaRecorder || mediaRecorder.state !== "recording") return;
-  mediaRecorder.pause();
-  paused = true;
-  $("#btnPause").disabled = true;
-  $("#btnResume").disabled = false;
-  setStatus("Paused", "paused");
-}
-
-function resumeRec() {
-  if (!mediaRecorder || mediaRecorder.state !== "paused") return;
-  mediaRecorder.resume();
-  paused = false;
-  $("#btnPause").disabled = false;
-  $("#btnResume").disabled = true;
-  setStatus("Recording", "recording");
-}
-
-async function stopCapture() {
-  if (timerId) {
-    clearInterval(timerId);
-    timerId = null;
+  if (mediaRecorder?.state === "recording") {
+    mediaRecorder.pause();
+    paused = true;
+    $("#btnPause").disabled = true;
+    $("#btnResume").disabled = false;
+    setStatus("Paused", "paused");
   }
+}
+function resumeRec() {
+  if (mediaRecorder?.state === "paused") {
+    mediaRecorder.resume();
+    paused = false;
+    $("#btnPause").disabled = false;
+    $("#btnResume").disabled = true;
+    setStatus("Recording", "recording");
+  }
+}
+async function stopCapture() {
+  if (timerId) clearInterval(timerId), (timerId = null);
   if (mediaRecorder && mediaRecorder.state !== "inactive") mediaRecorder.stop();
   if (mediaStream) mediaStream.getTracks().forEach((t) => t.stop());
   mediaRecorder = null;
   mediaStream = null;
   paused = false;
-
   $("#btnStart").disabled = false;
   $("#btnPause").disabled = true;
   $("#btnResume").disabled = true;
@@ -372,12 +264,73 @@ async function stopCapture() {
   setStatus("Idle", "idle");
 }
 
-function exportText() {
-  const text = transcriptEl.innerText;
-  navigator.clipboard.writeText(text);
-  showBanner("Transcript copied to clipboard.");
+// ---------------- Upload ----------------
+function queueChunk(blob) {
+  queue.push({ blob, ts: Date.now(), retries: 0 });
+  maybeUpload();
+}
+async function maybeUpload() {
+  if (uploading || !navigator.onLine) return;
+  uploading = true;
+  try {
+    while (queue.length) {
+      const item = queue[0];
+      try {
+        const text = await uploadChunk(item.blob);
+        if (text?.trim()) {
+          addTimestamp();
+          appendText(text.trim());
+        } else {
+          console.warn(
+            "Empty transcript for chunk:",
+            new Date(item.ts).toISOString()
+          );
+        }
+        queue.shift();
+      } catch (e) {
+        item.retries++;
+        showBanner(
+          `Upload error: ${e?.message || String(e)} (try ${item.retries}/3)`,
+          true
+        );
+        if (item.retries >= 3) {
+          showBanner("Upload failed after retries — keeping in queue.", true);
+          break;
+        }
+        await delay(backoffMs(item.retries));
+      }
+    }
+  } finally {
+    uploading = false;
+  }
+}
+async function uploadChunk(blob) {
+  console.log("Uploading chunk bytes:", blob.size);
+  const fd = new FormData();
+  fd.append("file", blob, `chunk-${Date.now()}.webm`);
+
+  let res;
+  try {
+    res = await fetch(state.serverUrl, { method: "POST", body: fd });
+  } catch (err) {
+    console.error("Network error:", err);
+    throw err;
+  }
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    console.error("Server responded non-OK:", res.status, text);
+    throw new Error(`HTTP ${res.status} ${text}`);
+  }
+
+  const data = await res.json().catch(() => ({}));
+  return data.text || data.transcript || "";
 }
 
+// ---------------- Export ----------------
+function exportText() {
+  navigator.clipboard.writeText(transcriptEl.innerText);
+  showBanner("Transcript copied to clipboard.");
+}
 function exportJSON() {
   const payload = {
     createdAt: new Date(startedAt || Date.now()).toISOString(),
@@ -395,116 +348,7 @@ function exportJSON() {
   URL.revokeObjectURL(url);
 }
 
-function queueChunk(blob) {
-  queue.push({ blob, ts: Date.now(), retries: 0 });
-  maybeUpload();
-}
-async function maybeUpload() {
-  if (uploading || !navigator.onLine) return;
-  uploading = true;
-  try {
-    while (queue.length) {
-      const item = queue[0]; // peek
-      try {
-        const text = await uploadChunk(item.blob);
-        if (text && text.trim()) {
-          addTimestamp();
-          appendText(text.trim());
-        } else {
-          console.warn(
-            "Empty transcript for chunk at",
-            new Date(item.ts).toISOString()
-          );
-        }
-        queue.shift(); // remove processed item
-      } catch (e) {
-        item.retries = (item.retries || 0) + 1;
-        showBanner(
-          `Upload error: ${e?.message || String(e)}`.slice(0, 120) +
-            ` (try ${item.retries}/3)`,
-          true
-        );
-
-        if (item.retries >= 3) {
-          // leave the item in the queue; we'll try again later (e.g., when back online)
-          showBanner("Upload failed after retries — keeping in queue.", true);
-          break; // exit the while loop so we don't spin
-        }
-
-        await delay(backoffMs(item.retries));
-        // then loop to retry the same item
-      }
-    }
-  } finally {
-    uploading = false;
-  }
-}
-
-// async function uploadChunk(blob) {
-//   console.log("Uploading chunk bytes:", blob.size);
-//   const fd = new FormData();
-//   fd.append("file", blob, `chunk-${Date.now()}.webm`);
-//   let res;
-//   try {
-//     res = await fetch(state.serverUrl, { method: "POST", body: fd });
-//   } catch (err) {
-//     console.error("Network error to server:", err);
-//     throw err;
-//   }
-//   if (!res.ok) {
-//     const text = await res.text().catch(() => "");
-//     console.error("Server responded non-OK:", res.status, text);
-//     throw new Error(`HTTP ${res.status} ${text.slice(0, 200)}`);
-//   }
-//   const data = await res.json().catch(() => ({}));
-//   console.log(
-//     "Transcript text length:",
-//     (data.text || "").length,
-//     "preview:",
-//     (data.text || "").slice(0, 60)
-//   );
-//   return data.text || data.transcript || "";
-// }
-
-async function uploadChunk(blob) {
-  console.log("Uploading chunk bytes:", blob.size);
-  const fd = new FormData();
-  fd.append("file", blob, `chunk-${Date.now()}.webm`);
-  let res;
-  try {
-    res = await fetch(state.serverUrl, { method: "POST", body: fd });
-  } catch (err) {
-    console.error("Network error to server:", err);
-    throw err;
-  }
-  if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    console.error("Server responded non-OK:", res.status, text);
-    throw new Error(`HTTP ${res.status} ${text.slice(0, 200)}`);
-  }
-  const data = await res.json().catch(() => ({}));
-  console.log(
-    "Transcript text length:",
-    (data.text || "").length,
-    "preview:",
-    (data.text || "").slice(0, 60)
-  );
-  return data.text || data.transcript || "";
-}
-
-async function getSystemAudio() {
-  // Prompts a picker: select a screen/tab and tick "Share system audio"
-  const s = await navigator.mediaDevices.getDisplayMedia({
-    video: true,
-    audio: true,
-  });
-  // Stop video track to save CPU; keep audio
-  const v = s.getVideoTracks()[0];
-  if (v) v.stop();
-  console.log("System audio tracks:", s.getAudioTracks().length);
-  return s;
-}
-
+// ---------------- Tab Helpers ----------------
 async function getActiveTabIdFromBg() {
   try {
     const resp = await chrome.runtime.sendMessage({
@@ -515,18 +359,13 @@ async function getActiveTabIdFromBg() {
     return null;
   }
 }
-
 async function getPreferredTargetTabId() {
-  // 1) URL query param if popup fallback opened us
   const q = new URLSearchParams(location.search);
   const fromQuery = Number(q.get("targetTabId"));
   if (!Number.isNaN(fromQuery) && fromQuery > 0) return fromQuery;
 
-  // 2) Stored by action click (works for real side panel)
   const { targetTabId } = await chrome.storage.local.get("targetTabId");
   if (targetTabId) return Number(targetTabId);
 
-  // 3) Ask background for the current active tab
-  const fromBg = await getActiveTabIdFromBg();
-  return fromBg || null;
+  return (await getActiveTabIdFromBg()) || null;
 }
